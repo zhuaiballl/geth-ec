@@ -51,6 +51,13 @@ type StateDB interface {
 	GetTransientState(addr common.Address, key common.Hash) common.Hash
 	SetTransientState(addr common.Address, key, value common.Hash)
 
+	// begin ec-chain
+	GetLastAccessBlockNum(addr common.Address) uint64
+	SetLastAccessBlockNum(addr common.Address, num uint64)
+	ArchiveStaleAccounts(currentBlockNumber uint64)
+	GetLastAccessAccountsNumInaccurate() int
+	// end ec-chain
+
 	Suicide(common.Address) bool
 	HasSuicided(common.Address) bool
 

@@ -31,4 +31,7 @@ type StateAccount struct {
 	Balance  *big.Int
 	Root     common.Hash // merkle root of the storage trie
 	CodeHash []byte
+	//// begin ec-chain
+	//LastAccessBlockNum uint64
+	//// end ec-chain
 }

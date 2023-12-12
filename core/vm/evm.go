@@ -17,6 +17,8 @@
 package vm
 
 import (
+	"fmt"
+	"github.com/ethereum/go-ethereum/experiment"
 	"math/big"
 	"sync/atomic"
 
@@ -172,6 +174,11 @@ func (evm *EVM) SetBlockContext(blockCtx BlockContext) {
 // the necessary steps to create accounts and reverses the state in case of an
 // execution error or failed value transfer.
 func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas uint64, value *big.Int) (ret []byte, leftOverGas uint64, err error) {
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuck3",
+		"num":       evm.StateDB.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", evm.StateDB),
+	})
 	// Fail if we're trying to execute above the call depth limit
 	if evm.depth > int(params.CallCreateDepth) {
 		return nil, gas, ErrDepth
@@ -225,6 +232,24 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 		code := evm.StateDB.GetCode(addr)
 		if len(code) == 0 {
 			ret, err = nil, nil // gas is unchanged
+
+			// begin ec-chain
+			_ = experiment.Record(map[string]interface{}{
+				"Debug":     "fuck4",
+				"num":       evm.StateDB.GetLastAccessAccountsNumInaccurate(),
+				"stateAddr": fmt.Sprintf("%p", evm.StateDB),
+			})
+			// 1. update account's last access block number
+			evm.StateDB.SetLastAccessBlockNum(caller.Address(), evm.Context.BlockNumber.Uint64())
+			evm.StateDB.SetLastAccessBlockNum(addr, evm.Context.BlockNumber.Uint64())
+			_ = experiment.Record(map[string]interface{}{
+				"Debug":     "fuck4!",
+				"len":       evm.StateDB.GetLastAccessAccountsNumInaccurate(),
+				"stateAddr": fmt.Sprintf("%p", evm.StateDB)})
+
+			// 2. remove stale accounts that are not called for a long time
+
+			// end ec-chain
 		} else {
 			addrCopy := addr
 			// If the account has no code, we can abort here
@@ -247,6 +272,12 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 		//} else {
 		//	evm.StateDB.DiscardSnapshot(snapshot)
 	}
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuck4!!",
+		"len":       evm.StateDB.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", evm.StateDB),
+	})
+
 	return ret, gas, err
 }
 

@@ -18,6 +18,7 @@ package core
 
 import (
 	"fmt"
+	"github.com/ethereum/go-ethereum/experiment"
 	"math"
 	"math/big"
 
@@ -361,7 +362,20 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	// Execute the preparatory steps for state transition which includes:
 	// - prepare accessList(post-berlin)
 	// - reset transient storage(eip 1153)
+
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckA1",
+		"len":       st.state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", st.state),
+	})
+
 	st.state.Prepare(rules, msg.From, st.evm.Context.Coinbase, msg.To, vm.ActivePrecompiles(rules), msg.AccessList)
+
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckA2",
+		"len":       st.state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", st.state),
+	})
 
 	var (
 		ret   []byte
@@ -372,7 +386,20 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	} else {
 		// Increment the nonce for the next transaction
 		st.state.SetNonce(msg.From, st.state.GetNonce(sender.Address())+1)
+
+		_ = experiment.Record(map[string]interface{}{
+			"Debug":     "fuckA3",
+			"len":       st.state.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", st.state),
+		})
+
 		ret, st.gasRemaining, vmerr = st.evm.Call(sender, st.to(), msg.Data, st.gasRemaining, msg.Value)
+
+		_ = experiment.Record(map[string]interface{}{"Debug": "fuckA4",
+			"len":       st.state.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", st.state),
+		})
+
 	}
 
 	if !rules.IsLondon {
@@ -396,6 +423,12 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		fee.Mul(fee, effectiveTip)
 		st.state.AddBalance(st.evm.Context.Coinbase, fee)
 	}
+
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckA5",
+		"len":       st.state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", st.state),
+		"err":       vmerr})
 
 	return &ExecutionResult{
 		UsedGas:    st.gasUsed(),

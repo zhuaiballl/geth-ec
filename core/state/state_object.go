@@ -488,6 +488,26 @@ func (s *stateObject) setNonce(nonce uint64) {
 	s.data.Nonce = nonce
 }
 
+//// begin ec-chain
+//
+//func (s *stateObject) SetLastAccessBlockNum(num uint64) {
+//	s.db.journal.append(lastAccessBlockNumChange{
+//		account: &s.address,
+//		prev:    s.data.LastAccessBlockNum,
+//	})
+//	s.setLastAccessBlockNum(num)
+//}
+//
+//func (s *stateObject) setLastAccessBlockNum(num uint64) {
+//	s.data.LastAccessBlockNum = num
+//}
+//
+//func (s *stateObject) LastAccessBlockNum() uint64 {
+//	return s.data.LastAccessBlockNum
+//}
+//
+//// end ec-chain
+
 func (s *stateObject) CodeHash() []byte {
 	return s.data.CodeHash
 }

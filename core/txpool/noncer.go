@@ -17,6 +17,8 @@
 package txpool
 
 import (
+	"fmt"
+	"github.com/ethereum/go-ethereum/experiment"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -34,6 +36,11 @@ type noncer struct {
 
 // newNoncer creates a new virtual state database to track the pool nonces.
 func newNoncer(statedb *state.StateDB) *noncer {
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "newNoncer",
+		"len":       statedb.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", statedb),
+	})
 	return &noncer{
 		fallback: statedb.Copy(),
 		nonces:   make(map[common.Address]uint64),

@@ -143,6 +143,13 @@ type (
 		account       *common.Address
 		key, prevalue common.Hash
 	}
+
+	//// begin ec-chain
+	//lastAccessBlockNumChange struct {
+	//	account *common.Address
+	//	prev    uint64
+	//}
+	//// end ec-chain
 )
 
 func (ch createObjectChange) revert(s *StateDB) {
@@ -201,6 +208,14 @@ func (ch nonceChange) revert(s *StateDB) {
 func (ch nonceChange) dirtied() *common.Address {
 	return ch.account
 }
+
+//func (ch lastAccessBlockNumChange) revert(s *StateDB) {
+//	s.getStateObject(*ch.account).setLastAccessBlockNum(ch.prev)
+//}
+//
+//func (ch lastAccessBlockNumChange) dirtied() *common.Address {
+//	return ch.account
+//}
 
 func (ch codeChange) revert(s *StateDB) {
 	s.getStateObject(*ch.account).setCode(common.BytesToHash(ch.prevhash), ch.prevcode)

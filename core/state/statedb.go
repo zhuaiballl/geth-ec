@@ -18,11 +18,14 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"sort"
 	"time"
+
+	"github.com/ethereum/go-ethereum/experiment"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -157,6 +160,14 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 			sdb.snapStorage = make(map[common.Hash]map[common.Hash][]byte)
 		}
 	}
+
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckc1 new state",
+		"num":       sdb.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", sdb),
+		"root":      root,
+	})
+
 	return sdb, nil
 }
 
@@ -422,6 +433,136 @@ func (s *StateDB) SetNonce(addr common.Address, nonce uint64) {
 		stateObject.SetNonce(nonce)
 	}
 }
+
+// begin ec-chain
+
+func getLastAccessAddress() common.Address {
+	return common.BigToAddress(big.NewInt(1))
+}
+
+func (s *StateDB) prepareLastAccessStateObject() *stateObject {
+	addr := getLastAccessAddress()
+	obj := s.getStateObject(addr)
+	if obj == nil || obj.empty() {
+		obj, _ = s.createObject(addr)
+		obj.SetNonce(1) // so that the account is not considered empty
+	}
+	if obj.empty() {
+		panic("LastAccessStateObject is considered empty. this should not happen!")
+	}
+
+	return obj
+}
+
+func (s *StateDB) setLastAccessAccounts(accountBlockIDs map[common.Address]uint64) {
+	obj := s.prepareLastAccessStateObject()
+	b, err := json.Marshal(accountBlockIDs)
+	if err != nil {
+		panic(err)
+	}
+	obj.SetCode(crypto.Keccak256Hash(b), b)
+}
+
+func (s *StateDB) getLastAccessAccountsReadonly() (accountBlockIDs map[common.Address]uint64) {
+	addr := getLastAccessAddress()
+	obj := s.getStateObject(addr)
+	if obj == nil {
+		return nil
+	}
+	b := obj.Code(s.db)
+	if len(b) == 0 {
+		return make(map[common.Address]uint64)
+	}
+	err := json.Unmarshal(b, &accountBlockIDs)
+	if err != nil {
+		panic(err)
+	}
+	return accountBlockIDs
+}
+
+func (s *StateDB) GetLastAccessAccountsNumInaccurate() int {
+	d := s.getLastAccessAccountsReadonly()
+	if d == nil {
+		return -1
+	}
+	return len(s.getLastAccessAccountsReadonly())
+}
+
+func (s *StateDB) GetLastAccessBlockNum(addr common.Address) uint64 {
+	d := s.getLastAccessAccountsReadonly()
+	if val, ok := d[addr]; ok {
+		return val
+	}
+	return 0
+}
+
+func (s *StateDB) SetLastAccessBlockNum(addr common.Address, num uint64) {
+	// make sure the account is a regular account
+	obj := s.getStateObject(addr)
+	b := obj.Code(s.db)
+	if len(b) != 0 {
+		// ignore if it is a contract account
+		return
+	}
+
+	_ = s.prepareLastAccessStateObject()
+	d := s.getLastAccessAccountsReadonly()
+	d[addr] = num
+	s.setLastAccessAccounts(d)
+}
+
+func (s *StateDB) ReloadStateAccount(addr common.Address) {
+	//TODO GetOrNewStateObject EncodeRLP rlp.DecodeBytes
+}
+
+func (s *StateDB) ArchiveStaleAccounts(currentBlockNumber uint64) {
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "ArchiveStaleAccounts called",
+		"num":       s.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", s),
+	})
+
+	// TODO ec, instead of delete
+	hotRange := uint64(100) // TODO make it an option
+	currentBlockNum := currentBlockNumber
+	addrToBeDeleted := make([]common.Address, 0)
+	d := s.getLastAccessAccountsReadonly()
+	if d == nil {
+		return
+	}
+
+	for addr, lastAccessBlockNum := range d {
+		toBeDeleted := currentBlockNum-lastAccessBlockNum > hotRange
+		_ = experiment.Record(map[string]interface{}{
+			"Debug":       "EC access",
+			"Addr":        addr,
+			"LastAccess":  lastAccessBlockNum,
+			"CurBlock":    currentBlockNum,
+			"ToBeDeleted": toBeDeleted,
+			"Balance":     s.GetBalance(addr),
+		})
+		if toBeDeleted {
+			addrToBeDeleted = append(addrToBeDeleted, addr)
+		}
+	}
+	for _, addr := range addrToBeDeleted {
+		// TODO make sure the account is a regular account, i.e., have no code and no storage
+		balance := s.GetBalance(addr)
+		delete(d, addr)
+		s.Suicide(addr)
+		// todo insert into ec db
+		_ = experiment.Record(map[string]interface{}{
+			"Debug":    "EC delete",
+			"Addr":     addr,
+			"CurBlock": currentBlockNum,
+			"Balance":  balance,
+		})
+	}
+	s.setLastAccessAccounts(d)
+
+}
+
+// end ec-chain
 
 func (s *StateDB) SetCode(addr common.Address, code []byte) {
 	stateObject := s.GetOrNewStateObject(addr)
@@ -712,13 +853,33 @@ func (s *StateDB) Copy() *StateDB {
 		journal:              newJournal(),
 		hasher:               crypto.NewKeccakState(),
 	}
+
+	_ = experiment.Record(map[string]interface{}{"Debug": "state copy 1",
+		"len":       s.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", s),
+	})
+
 	// Copy the dirty states, logs, and preimages
 	for addr := range s.journal.dirties {
+
+		_ = experiment.Record(map[string]interface{}{"Debug": "state copy 2",
+			"len":       s.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", s),
+			"addr":      addr,
+		})
+
 		// As documented [here](https://github.com/ethereum/go-ethereum/pull/16485#issuecomment-380438527),
 		// and in the Finalise-method, there is a case where an object is in the journal but not
 		// in the stateObjects: OOG after touch on ripeMD prior to Byzantium. Thus, we need to check for
 		// nil
 		if object, exist := s.stateObjects[addr]; exist {
+
+			_ = experiment.Record(map[string]interface{}{"Debug": "state copy 3",
+				"len":       s.GetLastAccessAccountsNumInaccurate(),
+				"stateAddr": fmt.Sprintf("%p", s),
+				"addr":      addr,
+			})
+
 			// Even though the original object is dirty, we are not copying the journal,
 			// so we need to make sure that any side-effect the journal would have caused
 			// during a commit (or similar op) is already applied to the copy.
@@ -733,13 +894,38 @@ func (s *StateDB) Copy() *StateDB {
 	// is empty. Thus, here we iterate over stateObjects, to enable copies
 	// of copies.
 	for addr := range s.stateObjectsPending {
+
+		_ = experiment.Record(map[string]interface{}{"Debug": "state copy 4",
+			"len":       s.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", s),
+			"addr":      addr,
+		})
+
 		if _, exist := state.stateObjects[addr]; !exist {
+			_ = experiment.Record(map[string]interface{}{"Debug": "state copy 5",
+				"len":       s.GetLastAccessAccountsNumInaccurate(),
+				"stateAddr": fmt.Sprintf("%p", s),
+				"addr":      addr,
+			})
+
 			state.stateObjects[addr] = s.stateObjects[addr].deepCopy(state)
 		}
 		state.stateObjectsPending[addr] = struct{}{}
 	}
 	for addr := range s.stateObjectsDirty {
+		_ = experiment.Record(map[string]interface{}{"Debug": "state copy 6",
+			"len":       s.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", s),
+			"addr":      addr,
+		})
+
 		if _, exist := state.stateObjects[addr]; !exist {
+			_ = experiment.Record(map[string]interface{}{"Debug": "state copy 7",
+				"len":       s.GetLastAccessAccountsNumInaccurate(),
+				"stateAddr": fmt.Sprintf("%p", s),
+				"addr":      addr,
+			})
+
 			state.stateObjects[addr] = s.stateObjects[addr].deepCopy(state)
 		}
 		state.stateObjectsDirty[addr] = struct{}{}
@@ -796,6 +982,14 @@ func (s *StateDB) Copy() *StateDB {
 			state.snapStorage[k] = temp
 		}
 	}
+
+	_ = experiment.Record(map[string]interface{}{"Debug": "state copy",
+		"lenSrc":       s.GetLastAccessAccountsNumInaccurate(),
+		"lenDst":       state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddrSrc": fmt.Sprintf("%p", s),
+		"stateAddrDst": fmt.Sprintf("%p", state),
+	})
+
 	return state
 }
 
@@ -835,6 +1029,13 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 	addressesToPrefetch := make([][]byte, 0, len(s.journal.dirties))
 	for addr := range s.journal.dirties {
 		obj, exist := s.stateObjects[addr]
+		_ = experiment.Record(map[string]interface{}{
+			"debug":     "StateFinalize1",
+			"stateAddr": fmt.Sprintf("%p", s),
+			"num":       s.GetLastAccessAccountsNumInaccurate(),
+			"addr":      addr,
+			"exist":     exist,
+		})
 		if !exist {
 			// ripeMD is 'touched' at block 1714175, in tx 0x1237f737031e40bcde4a8b7e717b2d15e3ecadfe49bb1bbc71ee9deb09c6fcf2
 			// That tx goes out of gas, and although the notion of 'touched' does not exist there, the
@@ -845,6 +1046,14 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			continue
 		}
 		if obj.suicided || (deleteEmptyObjects && obj.empty()) {
+			_ = experiment.Record(map[string]interface{}{
+				"debug":     "StateFinalize2",
+				"stateAddr": fmt.Sprintf("%p", s),
+				"num":       s.GetLastAccessAccountsNumInaccurate(),
+				"addr":      addr,
+				"cond1":     obj.suicided,
+				"cond2":     obj.empty(),
+			})
 			obj.deleted = true
 
 			// We need to maintain account deletions explicitly (will remain
@@ -860,7 +1069,19 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 				delete(s.snapStorage, obj.addrHash)  // Clear out any previously updated storage data (may be recreated via a resurrect)
 			}
 		} else {
+			_ = experiment.Record(map[string]interface{}{
+				"debug":     "StateFinalize3",
+				"stateAddr": fmt.Sprintf("%p", s),
+				"num":       s.GetLastAccessAccountsNumInaccurate(),
+				"addr":      addr,
+			})
 			obj.finalise(true) // Prefetch slots in the background
+			_ = experiment.Record(map[string]interface{}{
+				"debug":     "StateFinalize4",
+				"stateAddr": fmt.Sprintf("%p", s),
+				"num":       s.GetLastAccessAccountsNumInaccurate(),
+				"addr":      addr,
+			})
 		}
 		s.stateObjectsPending[addr] = struct{}{}
 		s.stateObjectsDirty[addr] = struct{}{}
@@ -906,7 +1127,19 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	for addr := range s.stateObjectsPending {
 		if obj := s.stateObjects[addr]; !obj.deleted {
 			obj.updateRoot(s.db)
+			_ = experiment.Record(map[string]interface{}{
+				"Debug":     "StateDB IntermediateRoot 1",
+				"num":       s.GetLastAccessAccountsNumInaccurate(),
+				"stateAddr": fmt.Sprintf("%p", s),
+				"addr":      addr.String(),
+			})
 		}
+		_ = experiment.Record(map[string]interface{}{
+			"Debug":     "StateDB IntermediateRoot 2",
+			"num":       s.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", s),
+			"addr":      addr.String(),
+		})
 	}
 	// Now we're about to start to write changes to the trie. The trie is so far
 	// _untouched_. We can check with the prefetcher, if it can give us a trie
@@ -918,10 +1151,29 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	}
 	usedAddrs := make([][]byte, 0, len(s.stateObjectsPending))
 	for addr := range s.stateObjectsPending {
+		_ = experiment.Record(map[string]interface{}{
+			"Debug":     "StateDB IntermediateRoot 3",
+			"num":       s.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", s),
+			"addr":      addr.String(),
+		})
+
 		if obj := s.stateObjects[addr]; obj.deleted {
+			_ = experiment.Record(map[string]interface{}{
+				"Debug":     "StateDB IntermediateRoot 4",
+				"num":       s.GetLastAccessAccountsNumInaccurate(),
+				"stateAddr": fmt.Sprintf("%p", s),
+				"addr":      addr.String(),
+			})
 			s.deleteStateObject(obj)
 			s.AccountDeleted += 1
 		} else {
+			_ = experiment.Record(map[string]interface{}{
+				"Debug":     "StateDB IntermediateRoot 5",
+				"num":       s.GetLastAccessAccountsNumInaccurate(),
+				"stateAddr": fmt.Sprintf("%p", s),
+				"addr":      addr.String(),
+			})
 			s.updateStateObject(obj)
 			s.AccountUpdated += 1
 		}
@@ -958,13 +1210,24 @@ func (s *StateDB) clearJournalAndRefund() {
 
 // Commit writes the state to the underlying in-memory trie database.
 func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckc2 StateDB Commit 1",
+		"num":       s.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", s),
+	})
+	//todo ec-chain save the list!
+
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
 		return common.Hash{}, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
 	s.IntermediateRoot(deleteEmptyObjects)
-
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckc2 StateDB Commit 2",
+		"num":       s.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", s),
+	})
 	// Commit objects to the trie, measuring the elapsed time
 	var (
 		accountTrieNodesUpdated int
@@ -1011,6 +1274,11 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 			log.Crit("Failed to commit dirty codes", "error", err)
 		}
 	}
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckc2 StateDB Commit 3",
+		"num":       s.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", s),
+	})
 	// Write the account trie changes, measuring the amount of wasted time
 	var start time.Time
 	if metrics.EnabledExpensive {
@@ -1038,6 +1306,11 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 		s.AccountUpdated, s.AccountDeleted = 0, 0
 		s.StorageUpdated, s.StorageDeleted = 0, 0
 	}
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckc2 StateDB Commit 4",
+		"num":       s.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", s),
+	})
 	// If snapshotting is enabled, update the snapshot tree with this new version
 	if s.snap != nil {
 		start := time.Now()
@@ -1079,6 +1352,11 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 			s.TrieDBCommits += time.Since(start)
 		}
 	}
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckc2 StateDB Commit 5",
+		"num":       s.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", s),
+	})
 	return root, nil
 }
 
@@ -1096,6 +1374,11 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 // - Add coinbase to access list (EIP-3651)
 // - Reset transient storage (EIP-1153)
 func (s *StateDB) Prepare(rules params.Rules, sender, coinbase common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "fuckc3",
+		"num":       s.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", s),
+	})
 	if rules.IsBerlin {
 		// Clear out any leftover from previous executions
 		al := newAccessList()

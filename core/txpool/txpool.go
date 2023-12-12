@@ -19,6 +19,7 @@ package txpool
 import (
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/experiment"
 	"math"
 	"math/big"
 	"sort"
@@ -826,6 +827,11 @@ func (pool *TxPool) isFuture(from common.Address, tx *types.Transaction) bool {
 //
 // Note, this method assumes the pool lock is held!
 func (pool *TxPool) enqueueTx(hash common.Hash, tx *types.Transaction, local bool, addAll bool) (bool, error) {
+	// experiment mod modification
+	{
+		_ = experiment.Record(map[string]interface{}{"Type": "NewTransaction", "TransactionHash": hash})
+	}
+
 	// Try to insert the transaction into the future queue
 	from, _ := types.Sender(pool.signer, tx) // already validated
 	if pool.queue[from] == nil {

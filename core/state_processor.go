@@ -18,6 +18,7 @@ package core
 
 import (
 	"fmt"
+	"github.com/ethereum/go-ethereum/experiment"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -57,6 +58,7 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+	_ = experiment.Record(map[string]interface{}{"Debug": "fuck5"})
 	var (
 		receipts    types.Receipts
 		usedGas     = new(uint64)
@@ -91,6 +93,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if len(withdrawals) > 0 && !p.config.IsShanghai(block.Time()) {
 		return nil, nil, 0, fmt.Errorf("withdrawals before shanghai")
 	}
+
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles(), withdrawals)
 
@@ -101,19 +104,60 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 	// Create a new context to be used in the EVM environment.
 	txContext := NewEVMTxContext(msg)
 	evm.Reset(txContext, statedb)
-
+	_ = experiment.Record(map[string]interface{}{
+		"debug":           "ApplyTransaction4",
+		"TransactionHash": tx.Hash(),
+		"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr":       fmt.Sprintf("%p", statedb),
+	})
 	// Apply the transaction to the current state (included in the env).
 	result, err := ApplyMessage(evm, msg, gp)
+	_ = experiment.Record(map[string]interface{}{
+		"debug":           "ApplyTransaction5",
+		"TransactionHash": tx.Hash(),
+		"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr":       fmt.Sprintf("%p", statedb),
+	})
 	if err != nil {
 		return nil, err
 	}
 
+	_ = experiment.Record(map[string]interface{}{
+		"debug":           "ApplyTransaction6",
+		"TransactionHash": tx.Hash(),
+		"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr":       fmt.Sprintf("%p", statedb),
+	})
 	// Update the state with pending changes.
 	var root []byte
 	if config.IsByzantium(blockNumber) {
+		_ = experiment.Record(map[string]interface{}{
+			"debug":           "ApplyTransaction7",
+			"TransactionHash": tx.Hash(),
+			"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr":       fmt.Sprintf("%p", statedb),
+		})
 		statedb.Finalise(true)
+		_ = experiment.Record(map[string]interface{}{
+			"debug":           "ApplyTransaction8",
+			"TransactionHash": tx.Hash(),
+			"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr":       fmt.Sprintf("%p", statedb),
+		})
 	} else {
+		_ = experiment.Record(map[string]interface{}{
+			"debug":           "ApplyTransaction9",
+			"TransactionHash": tx.Hash(),
+			"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr":       fmt.Sprintf("%p", statedb),
+		})
 		root = statedb.IntermediateRoot(config.IsEIP158(blockNumber)).Bytes()
+		_ = experiment.Record(map[string]interface{}{
+			"debug":           "ApplyTransaction10",
+			"TransactionHash": tx.Hash(),
+			"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr":       fmt.Sprintf("%p", statedb),
+		})
 	}
 	*usedGas += result.UsedGas
 
@@ -148,11 +192,52 @@ func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, sta
 // indicating the block was invalid.
 func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64, cfg vm.Config) (*types.Receipt, error) {
 	msg, err := TransactionToMessage(tx, types.MakeSigner(config, header.Number), header.BaseFee)
+	// experiment mod modification
+	_ = experiment.Record(map[string]interface{}{
+		"Type":            "TransactionBegin",
+		"TransactionHash": tx.Hash(),
+		"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr":       fmt.Sprintf("%p", statedb),
+	})
 	if err != nil {
 		return nil, err
 	}
 	// Create a new context to be used in the EVM environment
 	blockContext := NewEVMBlockContext(header, bc, author)
+	_ = experiment.Record(map[string]interface{}{
+		"debug":           "ApplyTransaction2",
+		"TransactionHash": tx.Hash(),
+		"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr":       fmt.Sprintf("%p", statedb),
+	})
 	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, config, cfg)
-	return applyTransaction(msg, config, gp, statedb, header.Number, header.Hash(), tx, usedGas, vmenv)
+	_ = experiment.Record(map[string]interface{}{
+		"debug":           "ApplyTransaction3",
+		"TransactionHash": tx.Hash(),
+		"num":             statedb.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr":       fmt.Sprintf("%p", statedb),
+	})
+	receipt, err := applyTransaction(msg, config, gp, statedb, header.Number, header.Hash(), tx, usedGas, vmenv)
+
+	// experiment mod modification
+	{
+		loggingUnit := map[string]interface{}{
+			"Type":            "TransactionEnd",
+			"TransactionHash": tx.Hash(),
+			"From":            msg.From.Hex(),
+			"To":              "",
+			//"DataFirst4Byte":  hex.EncodeToString(msg.Data[0:4]),
+			"num":       statedb.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", statedb),
+		}
+		// msg.To could be nil
+		to := msg.To
+		if to != nil {
+			loggingUnit["To"] = to.Hex()
+		}
+
+		_ = experiment.Record(loggingUnit)
+	}
+
+	return receipt, err
 }

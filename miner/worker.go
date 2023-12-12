@@ -19,6 +19,7 @@ package miner
 import (
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/experiment"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -103,6 +104,12 @@ type environment struct {
 
 // copy creates a deep copy of environment.
 func (env *environment) copy() *environment {
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "worker_env_copy",
+		"len":       env.state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", env.state),
+	})
+
 	cpy := &environment{
 		signer:    env.signer,
 		state:     env.state.Copy(),
@@ -388,6 +395,12 @@ func (w *worker) pending() (*types.Block, *state.StateDB) {
 	if w.snapshotState == nil {
 		return nil, nil
 	}
+
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "worker_pending",
+		"len":       w.snapshotState.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", w.snapshotState),
+	})
 	return w.snapshotBlock, w.snapshotState.Copy()
 }
 
@@ -599,6 +612,12 @@ func (w *worker) mainLoop() {
 			// sealing block for higher profit.
 			if w.isRunning() && w.current != nil && len(w.current.uncles) < 2 {
 				start := time.Now()
+
+				_ = experiment.Record(map[string]interface{}{
+					"Debug":     "worker_commitUncle",
+					"num":       w.current.state.GetLastAccessAccountsNumInaccurate(),
+					"stateAddr": fmt.Sprintf("%p", w.current.state),
+				})
 				if err := w.commitUncle(w.current, ev.Block.Header()); err == nil {
 					w.commit(w.current.copy(), nil, true, start)
 				}
@@ -635,6 +654,7 @@ func (w *worker) mainLoop() {
 				}
 				txset := types.NewTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee)
 				tcount := w.current.tcount
+				_ = experiment.Record(map[string]interface{}{"Debug": "fucka1"})
 				w.commitTransactions(w.current, txset, nil)
 
 				// Only update the snapshot if any new transactions were added
@@ -791,6 +811,7 @@ func (w *worker) resultLoop() {
 
 // makeEnv creates a new environment for the sealing block.
 func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase common.Address) (*environment, error) {
+	_ = experiment.Record(map[string]interface{}{"Debug": "fucka9"})
 	// Retrieve the parent state to execute on top and start a prefetcher for
 	// the miner to speed block sealing up a bit.
 	state, err := w.chain.StateAt(parent.Root)
@@ -858,9 +879,15 @@ func (w *worker) updateSnapshot(env *environment) {
 	)
 	w.snapshotReceipts = copyReceipts(env.receipts)
 	w.snapshotState = env.state.Copy()
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "worker_updateSnapshot",
+		"len":       env.state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", env.state),
+	})
 }
 
 func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*types.Log, error) {
+	_ = experiment.Record(map[string]interface{}{"Debug": "fucka8"})
 	var (
 		snap = env.state.Snapshot()
 		gp   = env.gasPool.Gas()
@@ -878,6 +905,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 }
 
 func (w *worker) commitTransactions(env *environment, txs *types.TransactionsByPriceAndNonce, interrupt *int32) error {
+	_ = experiment.Record(map[string]interface{}{"Debug": "fucka7"})
 	gasLimit := env.header.GasLimit
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
@@ -985,6 +1013,7 @@ type generateParams struct {
 // either based on the last chain head or specified parent. In this function
 // the pending transactions are not filled yet, only the empty task returned.
 func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
+	_ = experiment.Record(map[string]interface{}{"Debug": "worker_prepareWork"})
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -1043,6 +1072,12 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
 	}
+
+	// begin ec-chain
+	_ = experiment.Record(map[string]interface{}{"Debug": "fuckb1"})
+	env.state.ArchiveStaleAccounts(header.Number.Uint64()) // todo is it a good place? seems yes
+	// end ec-chain
+
 	// Accumulate the uncles for the sealing work only if it's allowed.
 	if !genParams.noUncle {
 		commitUncles := func(blocks map[common.Hash]*types.Block) {
@@ -1068,6 +1103,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 // into the given sealing block. The transaction selection and ordering strategy can
 // be customized with the plugin in the future.
 func (w *worker) fillTransactions(interrupt *int32, env *environment) error {
+	_ = experiment.Record(map[string]interface{}{"Debug": "fucka5"})
 	// Split the pending transactions into locals and remotes
 	// Fill the block with all available pending transactions.
 	pending := w.eth.TxPool().Pending(true)
@@ -1095,6 +1131,7 @@ func (w *worker) fillTransactions(interrupt *int32, env *environment) error {
 
 // generateWork generates a sealing block based on the given parameters.
 func (w *worker) generateWork(params *generateParams) (*types.Block, *big.Int, error) {
+	_ = experiment.Record(map[string]interface{}{"Debug": "fucka4"})
 	work, err := w.prepareWork(params)
 	if err != nil {
 		return nil, nil, err
@@ -1113,6 +1150,9 @@ func (w *worker) generateWork(params *generateParams) (*types.Block, *big.Int, e
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(w.newpayloadTimeout))
 		}
 	}
+
+	// todo maybe here?
+
 	block, err := w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, work.txs, work.unclelist(), work.receipts, params.withdrawals)
 	if err != nil {
 		return nil, nil, err
@@ -1123,6 +1163,11 @@ func (w *worker) generateWork(params *generateParams) (*types.Block, *big.Int, e
 // commitWork generates several new sealing tasks based on the parent block
 // and submit them to the sealer.
 func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
+	_ = experiment.Record(map[string]interface{}{
+		"Debug": "worker_commitWork",
+		//"num":       w.current.state.GetLastAccessAccountsNumInaccurate(),
+		//"stateAddr": fmt.Sprintf("%p", w.current.state),
+	})
 	start := time.Now()
 
 	// Set the coinbase if the worker is running or it's required
@@ -1141,9 +1186,19 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 	if err != nil {
 		return
 	}
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "worker_commitWork_2",
+		"num":       work.state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", work.state),
+	})
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
 	if !noempty && atomic.LoadUint32(&w.noempty) == 0 {
+		_ = experiment.Record(map[string]interface{}{
+			"Debug":     "worker_commitWork_3",
+			"num":       work.state.GetLastAccessAccountsNumInaccurate(),
+			"stateAddr": fmt.Sprintf("%p", work.state),
+		})
 		w.commit(work.copy(), nil, false, start)
 	}
 	// Fill pending transactions from the txpool into the block.
@@ -1175,6 +1230,15 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 		work.discard()
 		return
 	}
+
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "worker_commitWork_4",
+		"num":       work.state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", work.state),
+	})
+
+	// todo maybe here?
+
 	// Submit the generated block for consensus sealing.
 	w.commit(work.copy(), w.fullTaskHook, true, start)
 
@@ -1191,10 +1255,26 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
 func (w *worker) commit(env *environment, interval func(), update bool, start time.Time) error {
+	_ = experiment.Record(map[string]interface{}{
+		"Debug":     "worker_commit",
+		"num":       env.state.GetLastAccessAccountsNumInaccurate(),
+		"stateAddr": fmt.Sprintf("%p", env.state),
+	})
 	if w.isRunning() {
+		// experiment mod modification
+		{
+			txHashs := make([]string, 0)
+			for _, v := range w.current.txs {
+				txHashs = append(txHashs, v.Hash().Hex())
+			}
+			_ = experiment.Record(map[string]interface{}{"Type": "BlockGen", "TransactionHashs": txHashs})
+		}
 		if interval != nil {
 			interval()
 		}
+
+		// todo maybe here?
+
 		// Create a local environment copy, avoid the data race with snapshot state.
 		// https://github.com/ethereum/go-ethereum/issues/24299
 		env := env.copy()
